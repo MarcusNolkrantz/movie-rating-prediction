@@ -7,6 +7,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.nn.utils
+import os
 
 from transformers import BertTokenizer, BertModel, AdamW, get_linear_schedule_with_warmup
 from sklearn.model_selection import train_test_split
@@ -105,16 +106,19 @@ def main():
 
     # Hyperparameters
     bert_model = 'bert-base-uncased'
-    batch_size = 16
-    num_epochs = 50
+    batch_size = 2 #8
+    num_epochs = 1 #3
+    learning_rate = 5e-6
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device = ", device)
 
     tokenizer = BertTokenizer.from_pretrained(bert_model)
 
-    df = pd.read_pickle("./datasets/tmp.bz2")
-    df = undersample(df, min(df['ratings'].value_counts()))
+    df = pd.read_pickle("./datasets/movies.bz2")
+    df = undersample(df, 2)#min(df['ratings'].value_counts()))
+
+    print(df['ratings'].value_counts())
 
     train, tmp = train_test_split(df, test_size=0.3)
     test, valid = train_test_split(tmp, test_size=0.5)
@@ -123,12 +127,12 @@ def main():
     valid_set = custom_dataset(valid, tokenizer, device)
     test_set = custom_dataset(test, tokenizer, device)
 
-    train_loader = data.DataLoader(train_set, batch_size=batch_size, shuffle=False, drop_last=True)
-    valid_loader = data.DataLoader(valid_set, batch_size=batch_size, shuffle=False, drop_last=True)
-    test_loader = data.DataLoader(test_set, batch_size=batch_size, shuffle=False, drop_last=True)
+    train_loader = data.DataLoader(train_set, batch_size=batch_size, shuffle=True, drop_last=True)
+    valid_loader = data.DataLoader(valid_set, batch_size=batch_size, shuffle=True, drop_last=True)
+    test_loader = data.DataLoader(test_set, batch_size=batch_size, shuffle=True, drop_last=True)
 
     model = custom_model(bert_model).to(device)
-    optimizer = AdamW(model.parameters(), lr=2e-5, correct_bias=False)
+    optimizer = AdamW(model.parameters(), lr=learning_rate, correct_bias=False)
 
     scheduler = get_linear_schedule_with_warmup(
             optimizer=optimizer,
@@ -148,6 +152,13 @@ def main():
     valid_rmses = []
 
 
+    # Create directory for the result
+    model_name = "model1"
+    dir_path = "./models/" + model_name
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path)
+
+
     # Training loop
     for i, epoch in enumerate(range(num_epochs)):
 
@@ -164,13 +175,42 @@ def main():
             best_rmse = valid_res['average_rmse']
             best_epoch = i + 1
 
-        print(f'-------Epoch finished-------\n Train_res = {train_res}\n Valid_res = {valid_res}\n')    
+        print(f'-------Epoch finished-------\n Train_res = {train_res}\n Valid_res = {valid_res}\n')   
+    
+    # Write config to file
+    config_path = dir_path + "/config.txt"
+    f = open(config_path, "w")
+    
+    f.write(f'Bert model = {bert_model}\n')
+    f.write(f'Batch size = {batch_size}\n')
+    f.write(f'Num epochs = {num_epochs}\n')
+    f.write(f'Learning rate = {learning_rate}\n')
+    f.write(f'Best model RMSE = {best_rmse} after epoch {best_epoch}\n\n')
+    f.write(f'Train losses = {train_losses}\n')
+    f.write(f'Train RMSE\'s = {train_rmses}\n')
+    f.write(f'Valid losses = {valid_losses}\n')
+    f.write(f'Valid RMSE\'s = {valid_rmses}\n')
 
-    print(f'Training finished. Best model RMSE = {best_rmse} after {best_epoch}\n')
-    print(f'Train losses = {train_losses}')
-    print(f'Train RMSE\'s = {train_rmses}')
-    print(f'Valid losses = {valid_losses}')
-    print(f'Valid RMSE\'s = {valid_rmses}')
+    f.close()
+
+    model_path = dir_path + "/model.pt"
+    torch.save(model.state_dict(), model_path)
+
+    # Test on unseen data
+    with torch.no_grad():
+        model.eval()
+        for batch in iter(test_loader):
+        
+            pred = model.forward(batch)
+            labels = torch.add(batch['labels'], -1)   
+            top_pred = torch.argmax(input=pred, dim=1)
+
+            print("\n----------test---------\n")
+            print(top_pred)
+            print(labels)
+
+            break
+
 
 
 if __name__ == "__main__":
